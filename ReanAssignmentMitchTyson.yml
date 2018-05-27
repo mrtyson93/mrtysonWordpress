@@ -1,0 +1,352 @@
+Description:
+  This CFT creates a VPC, two private subnets, both with their own Nat Insances (I normally would use a nat gateway but didn't because of the free tier limitation of this assignment), and a public subnet. It also creates an RDS subnet group using the two private subnets, then spins up a MySQL RDS instance in that subnet group using the parameters taken in. Lastly it spins up an ec2 instace in the public subnet that pulls chef recipes and wordpress files down, and installs them. The ec2 instance and RDS instance have security groups with only the necessary ports open. The URL that the wordpress site is available at is spit out in the Outputs section. NOTE, this needs to be created in the us-east-1 (N. Virginia) Region.
+
+Metadata: 
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - 
+        Label: 
+          default: "MySQL RDS Instance Parameters"
+        Parameters: 
+          - DatabaseName
+          - MasterUsername
+          - MasterPassword
+
+Parameters:
+  DatabaseName:
+    Description: Database Name 
+    Type: String
+  
+  MasterUsername:
+    Description: Database Master Username 
+    Type: String
+
+  MasterPassword:
+    Description: Database Master Password
+    Type: String
+    MinLength: 8
+    MaxLength: 41
+    AllowedPattern: ^[a-zA-Z0-9]*$
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: ReanAssignmentVPC
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: ReanAssignmentInternetGateway
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: us-east-1a
+      CidrBlock: 10.0.0.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: ReanAssignment Public Subnet
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: us-east-1b
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: ReanAssignment Private Subnet1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: us-east-1c
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: ReanAssignment Private Subnet2
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: ReanAssignment Public Route Table
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: 
+      - PublicRouteTable
+      - PublicSubnet
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
+
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: ReanAssignment Private Route Table1
+
+  DefaultPrivateRoute1:
+    Type: AWS::EC2::Route
+    DependsOn: 
+      - PrivateRouteTable1
+      - NatInstance1
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      InstanceId: !Ref NatInstance1
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: 
+      - PrivateRouteTable1
+      - PrivateSubnet1
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      SubnetId: !Ref PrivateSubnet1
+
+  PrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: ReanAssignment Private Route Table2
+
+  DefaultPrivateRoute2:
+    Type: AWS::EC2::Route
+    DependsOn: 
+      - PrivateRouteTable2
+      - NatInstance2
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      InstanceId: !Ref NatInstance2
+
+  PrivateSubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: 
+      - PrivateRouteTable2
+      - PrivateSubnet2
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      SubnetId: !Ref PrivateSubnet2
+
+  NatSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: VPC
+    Properties:
+      GroupDescription: Nat Security Group
+      VpcId: !Ref VPC
+      SecurityGroupIngress: 
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp : 73.68.188.198/32
+
+  NatSecurityGroupIngress1:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: NatSecurityGroup
+    Properties: 
+      GroupId: !Ref NatSecurityGroup
+      IpProtocol: icmp
+      FromPort: -1
+      ToPort: -1
+      SourceSecurityGroupId: !Ref NatSecurityGroup
+  
+  NatSecurityGroupIngress22:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: NatSecurityGroup
+    Properties: 
+      GroupId: !Ref NatSecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      SourceSecurityGroupId: !Ref NatSecurityGroup
+
+  NatSecurityGroupIngress80:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: NatSecurityGroup
+    Properties: 
+      GroupId: !Ref NatSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      SourceSecurityGroupId: !Ref NatSecurityGroup
+
+  NatSecurityGroupIngress443:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: NatSecurityGroup
+    Properties: 
+      GroupId: !Ref NatSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref NatSecurityGroup
+
+  PublicInstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: VPC
+    Properties:
+      GroupDescription: Public Instance SecurityGroup
+      VpcId: !Ref VPC
+      SecurityGroupIngress: 
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp : 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 22  
+        ToPort: 22
+        CidrIp : 73.68.188.198/32
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: 
+      - VPC
+      - PublicInstanceSecurityGroup
+    Properties:
+      GroupDescription: Security Group for Inbound Connection to DB
+      VpcId: !Ref VPC
+      SecurityGroupIngress: 
+      - IpProtocol: tcp
+        FromPort: 3306
+        ToPort: 3306
+        SourceSecurityGroupId: !Ref PublicInstanceSecurityGroup
+
+  RDSSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    DependsOn:
+      - PrivateSubnet1
+      - PrivateSubnet2
+    Properties: 
+      DBSubnetGroupDescription: Subnet Group for RDS Instance
+      DBSubnetGroupName: MySQL Subnet Group
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+  RDSMySQLInstance:
+    Type: AWS::RDS::DBInstance
+    DependsOn:
+      - RDSSubnetGroup
+      - RDSSecurityGroup
+    Properties:
+      Engine: MySQL
+      LicenseModel: general-public-license
+      EngineVersion: 5.5.59
+      DBInstanceClass: db.t2.micro
+      AllocatedStorage: '20'
+      DBInstanceIdentifier: mysqlinstanceidentifier
+      MasterUsername: !Ref MasterUsername
+      MasterUserPassword: !Ref MasterPassword
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+      PubliclyAccessible: false
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      DBName: !Ref DatabaseName
+      Port: 3306
+
+  NatInstance1:
+    Type: AWS::EC2::Instance
+    DependsOn: 
+      - PublicSubnet
+      - NatSecurityGroup
+    Properties: 
+      InstanceType: t2.micro
+      SourceDestCheck: false
+      ImageId: ami-54ca472b
+      NetworkInterfaces:
+      - AssociatePublicIpAddress: true
+        DeviceIndex: 0
+        GroupSet: 
+          - !Ref NatSecurityGroup
+        DeleteOnTermination: true
+        SubnetId: !Ref PublicSubnet
+
+  NatInstance2:
+    Type: AWS::EC2::Instance
+    DependsOn: 
+      - PublicSubnet
+      - NatSecurityGroup
+    Properties: 
+      InstanceType: t2.micro
+      SourceDestCheck: false
+      ImageId: ami-54ca472b
+      NetworkInterfaces:
+      - AssociatePublicIpAddress: true
+        DeviceIndex: 0
+        GroupSet: 
+          - !Ref NatSecurityGroup
+        DeleteOnTermination: true
+        SubnetId: !Ref PublicSubnet
+
+  WordpressInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: 
+      - PublicSubnet
+      - PublicInstanceSecurityGroup
+      - RDSMySQLInstance
+    Properties: 
+      InstanceType: t2.micro
+      ImageId: ami-14c5486b
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds: 
+        - !Ref PublicInstanceSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+           #!/bin/bash
+           cd ~
+           yum install git -y
+           curl -L https://www.opscode.com/chef/install.sh | bash
+           git clone https://github.com/mrtyson93/mrtysonWordpress.git
+
+           mv mrtysonWordpress/chef-repo/ /root/
+           cd chef-repo
+           chef-solo -c solo.rb -j web.json
+           
+           cd /root        
+           sed -i 's/database_name_here/${DatabaseName}/g' mrtysonWordpress/wordpress/wp-config.php
+           sed -i 's/username_here/${MasterUsername}/g' mrtysonWordpress/wordpress/wp-config.php
+           sed -i 's/password_here/${MasterPassword}/g' mrtysonWordpress/wordpress/wp-config.php
+           sed -i 's/hostname_here/${RDSMySQLInstance.Endpoint.Address}/g' mrtysonWordpress/wordpress/wp-config.php
+           mv mrtysonWordpress/wordpress/ /var/www/html/  
+
+Outputs:
+  WordpressURL:
+    Description: Wordpress URL
+    Value: !Join  [ "", [ "http://", !GetAtt WordpressInstance.PublicDnsName, "/wordpress" ] ]
+
+
